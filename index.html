@@ -1,0 +1,204 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><title>Wheelie Rush V7 REAL AUDIO</title><style>
+*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:#111;color:#fff;font-family:Arial,sans-serif;touch-action:none}canvas{display:block}#hud{position:fixed;left:8px;top:7px;font-weight:900;text-shadow:2px 2px #000;font-size:14px;pointer-events:none}#dash{position:fixed;right:7px;top:7px;background:#000d;padding:7px;border-radius:12px;text-align:right}button,select{font-size:13px;padding:7px;border:0;border-radius:8px;margin:2px}.controls{position:fixed;bottom:8px;width:100%;display:flex;justify-content:space-around}.ctrl{width:19vw;height:60px;font-size:13px;font-weight:900}.wheel{background:#ffd35c}.shift{background:#b9ddff}.orange{background:#ff9c32}#msg{position:fixed;top:27%;width:100%;text-align:center;font-size:27px;font-weight:1000;text-shadow:3px 3px #000;pointer-events:none}</style></head><body>
+<div id="susPanel" style="display:none;position:absolute;right:10px;top:68px;z-index:50;width:235px;background:#0b0e16ee;border:1px solid #ffffff44;border-radius:14px;padding:12px;color:#fff;font:700 13px system-ui">
+ <div style="font-size:16px;margin-bottom:10px">🔧 SUSPENSION</div>
+ <label>STIFFNESS: <span id="stiffVal">50</span></label>
+ <input id="stiffness" type="range" min="0" max="100" value="50" style="width:100%">
+ <div style="font-size:11px;opacity:.7;margin-bottom:9px">Higher = firmer, less travel, slower movement</div>
+ <label>DAMPING: <span id="dampVal">50</span></label>
+ <input id="damping" type="range" min="0" max="100" value="50" style="width:100%">
+ <div style="font-size:11px;opacity:.7">Higher = slower rebound/bounce</div>
+</div>
+<button id="susBtn" style="position:absolute;right:10px;top:18px;z-index:51;border:0;border-radius:11px;padding:9px 12px;font-weight:900">🔧 SUSPENSION</button>
+
+<audio id="idleAudio" src="dirtbike_idle_seamless.wav" preload="auto" loop></audio><audio id="quadAudio" src="quad.wav" preload="auto" loop></audio><audio id="turboAudio" src="turbo_bov.wav" preload="auto"></audio><canvas id="c"></canvas><div id="hud">WHEELIE RUSH V16 🏍️<br><span id="stats"></span><br><span id="status"></span></div><div id="dash"><div id="bikeUI"><b id="gear">N</b> 🌡️<span id="temp">65°F</span><br><button id="down">− GEAR</button><button id="up">+ GEAR</button><button class="orange" id="choke">CHOKE OFF</button><button class="orange" id="key">🔑 START</button></div><select id="ride"></select></div>
+<div id="msg"></div><div class="controls"><button class="ctrl" id="brake">BRAKE</button><button class="ctrl wheel" id="wheel">WHEELIE</button><button class="ctrl shift" id="trick">TRICK</button><button class="ctrl" id="gas">GAS</button></div>
+<script>
+const c=document.querySelector('#c'),g=c.getContext('2d');let W,H;function size(){W=c.width=innerWidth;H=c.height=innerHeight}size();addEventListener('resize',size);
+const rides=[
+{n:'Kawasaki Ninja ZX-10R',t:'SPORT BIKE',c:'#21d14b',max:186},
+{n:'Kawasaki Ninja H2',t:'SPORT BIKE',c:'#1fc7b6',max:209},
+{n:'Ducati Panigale V4',t:'SPORT BIKE',c:'#e1262f',max:190},
+{n:'Kawasaki Ninja H2R',t:'SPORT BIKE',c:'#20252b',max:240},
+{n:'BMW S 1000 RR',t:'SPORT BIKE',c:'#e9edf2',max:193}
+];for(let i=1;i<=10;i++)rides.push({n:`Volt E-Bike ${i}`,t:'E-BIKE',max:65+i,c:`hsl(${185+i*10} 80% 48%)`});for(let i=1;i<=10;i++)rides.push({n:`MX 450 Dirt Bike ${i}`,t:'DIRT BIKE',max:92+i*2,c:`hsl(${i*29} 85% 50%)`});for(let i=1;i<=10;i++)rides.push({n:`Turbo Sport Quad ${i}`,t:'TUNED QUAD',max:100+i*2,c:`hsl(${290+i*9} 85% 52%)`});
+let idx=10,speed=0,angle=0,dist=0,gear=0,rpm=1000,temp=65,started=false,choke=false,gas=false,brake=false,wheel=false,trick=false,audio,turbo=0,last=performance.now(),pulse=0,scroll=0,suspF=0,suspR=0,suspFV=0,suspRV=0,audioRate=.86,lastRateUpdate=0,shiftCutUntil=0,stiffness=50,damping=50,chassisPitch=0;
+const R=()=>rides[idx],S=document.querySelector('#ride');const idleAudio=document.querySelector('#idleAudio'),quadAudio=document.querySelector('#quadAudio'),turboAudio=document.querySelector('#turboAudio');idleAudio.volume=.68;
+idleAudio.playbackRate=1.0;
+idleAudio.loop=true;
+quadAudio.volume=.72;
+turboAudio.volume=.9;
+rides.forEach((r,i)=>S.add(new Option(`${i+1}. ${r.n}`,i)));S.value=10;
+function AC(){if(!audio)audio=new (AudioContext||webkitAudioContext)();if(audio.state==='suspended')audio.resume()}
+function osc(f,d=.04,type='sawtooth',v=.02,to=f){if(!audio)return;let o=audio.createOscillator(),a=audio.createGain(),t=audio.currentTime;o.type=type;o.frequency.setValueAtTime(Math.max(20,f),t);o.frequency.exponentialRampToValueAtTime(Math.max(20,to),t+d);a.gain.setValueAtTime(v,t);a.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(a).connect(audio.destination);o.start();o.stop(t+d)}
+function noise(d=.05,v=.02,fq=900){if(!audio)return;let n=Math.floor(audio.sampleRate*d),b=audio.createBuffer(1,n,audio.sampleRate),dta=b.getChannelData(0);for(let i=0;i<n;i++)dta[i]=(Math.random()*2-1)*(1-i/n);let s=audio.createBufferSource(),f=audio.createBiquadFilter(),a=audio.createGain();s.buffer=b;f.type='bandpass';f.frequency.value=fq;a.gain.value=v;s.connect(f).connect(a).connect(audio.destination);s.start()}
+function shiftFX(){
+  AC();
+  noise(.018,.014,1200);
+  osc(95,.018,'square',.008,78);
+}
+function bov(){AC();turboAudio.currentTime=0;turboAudio.playbackRate=1;turboAudio.volume=.95;turboAudio.play().catch(()=>{noise(.28,.15,4200);osc(2200,.21,'sine',.055,450)});turbo=0}
+function stopReal(){idleAudio.pause();quadAudio.pause()}
+function startReal(a){if(a&&a.paused){const p=a.play();if(p&&p.catch)p.catch(()=>{});}}
+function engine(){
+ let r=R();
+ if((r.t==='DIRT BIKE'||r.t==='SPORT BIKE')){
+   quadAudio.pause();
+   if(started){
+     idleAudio.playbackRate=1.0;
+     let targetVol=gas?.76:.62;
+     idleAudio.volume+=(targetVol-idleAudio.volume)*.04;
+   }else idleAudio.pause();
+ }else if(r.t==='TUNED QUAD'){
+   idleAudio.pause();
+   if(gas||speed>1){
+     startReal(quadAudio);
+     let qTarget=Math.max(.86,Math.min(1.30,.88+speed/r.max*.42));
+     quadAudio.playbackRate+=(qTarget-quadAudio.playbackRate)*.12;
+     quadAudio.volume=.46+(gas?.26:.08);
+     if(gas&&speed>15)turbo=Math.min(1,turbo+.045);
+   }else quadAudio.pause();
+ }else{
+   idleAudio.pause();quadAudio.pause();
+   if(audio&&performance.now()-pulse>38&&(gas||speed)){pulse=performance.now();osc(250+speed*12,.04,'sine',.022)}
+ }
+}
+function flash(s){let m=document.querySelector('#msg');m.textContent=s;clearTimeout(flash.t);flash.t=setTimeout(()=>m.textContent='',600)}
+function bind(id,set){let e=document.querySelector('#'+id);e.addEventListener('pointerdown',q=>{q.preventDefault();AC();set(true)});['pointerup','pointercancel','pointerleave'].forEach(v=>e.addEventListener(v,()=>set(false)))}
+bind('gas',v=>{if(!v&&gas&&R().t==='TUNED QUAD'&&turbo>.2)bov();gas=v});bind('brake',v=>brake=v);bind('wheel',v=>wheel=v);bind('trick',v=>trick=v);
+document.querySelector('#key').onclick=()=>{
+ AC();
+ started=!started;
+ if(started){
+   idleAudio.currentTime=0;
+   idleAudio.playbackRate=1.0;
+   idleAudio.volume=.68;
+   idleAudio.play().catch(()=>{});
+ }else idleAudio.pause();
+ update();
+};
+document.querySelector('#choke').onclick=()=>{choke=!choke;update()};document.querySelector('#up').onclick=()=>{if(started&&gear<6){gear++;shiftFX();rpm=Math.max(1700,rpm*.58);update()}};document.querySelector('#down').onclick=()=>{if(gear>0){gear--;shiftFX();rpm=Math.min(10000,rpm*1.45);update()}};
+S.onchange=()=>{stopReal();turboAudio.pause();idx=+S.value;speed=angle=0;gear=0;temp=65;started=R().t!=='DIRT BIKE';turbo=0;update()};
+function update(){let d=(R().t==='DIRT BIKE'||R().t==='SPORT BIKE');document.querySelector('#bikeUI').style.display=d?'block':'none';document.querySelector('#gear').textContent=gear?`GEAR ${gear}`:'N';document.querySelector('#temp').textContent=Math.round(temp)+'°F';document.querySelector('#choke').textContent='CHOKE '+(choke?'ON':'OFF');document.querySelector('#key').textContent=started?'🔑 STOP':'🔑 START'}
+function road(){let y=H*.58;g.fillStyle='#82b9dd';g.fillRect(0,0,W,y);g.fillStyle='#6c8456';g.fillRect(0,H*.45,W,H*.13);g.fillStyle='#303236';g.fillRect(0,y,W,H-y);g.fillStyle='#eee';g.fillRect(0,y+8,W,4);let s=scroll%190;g.fillStyle='#f6e59c';for(let i=-1;i<8;i++)g.fillRect(i*190-s,H*.82,110,8);
+let fast=Math.max(0,(speed-30)/80);g.strokeStyle='rgba(255,255,255,.25)';g.lineWidth=2;for(let i=0;i<18;i++){let yy=y+25+(i*31+scroll*2.4)%(H-y);g.beginPath();g.moveTo(0,yy);g.lineTo(Math.min(W,60+fast*170),yy);g.stroke()}
+let par=(scroll*.22)%260;for(let i=-1;i<6;i++){let px=i*260-par;g.fillStyle='#506841';g.fillRect(px,H*.45-55,8,55);g.beginPath();g.arc(px+4,H*.45-61,27,0,7);g.fill()}}
+function wheelPic(px,py,r,spin){g.save();g.translate(px,py);g.rotate(spin);g.fillStyle='#111';g.beginPath();g.arc(0,0,r,0,7);g.fill();g.strokeStyle='#d0d0d0';g.lineWidth=3;g.beginPath();g.arc(0,0,r-7,0,7);g.stroke();g.strokeStyle='#777';g.lineWidth=1;for(let a=0;a<6.3;a+=.35){g.beginPath();g.moveTo(0,0);g.lineTo(Math.cos(a)*(r-8),Math.sin(a)*(r-8));g.stroke()}g.fillStyle='#555';g.beginPath();g.arc(0,0,5,0,7);g.fill();g.restore()}
+function rider(){g.fillStyle='#171717';g.beginPath();g.arc(2,-73,12,0,7);g.fill();g.fillStyle='#eee';g.beginPath();g.moveTo(5,-77);g.lineTo(18,-73);g.lineTo(7,-70);g.fill();g.strokeStyle='#222';g.lineWidth=9;g.beginPath();g.moveTo(0,-60);g.lineTo(-11,-37);g.lineTo(7,-22);g.moveTo(-3,-56);g.lineTo(27,-46);g.lineTo(42,-52);g.moveTo(-8,-35);g.lineTo(-31,-5);g.lineTo(-50,14);g.stroke()}
+function dirt(cx,cy,r){
+ let sp=scroll*.045, rearY=22+suspR, frontY=22+suspF;
+ g.save();g.translate(cx,cy);g.rotate(-angle+chassisPitch);
+ wheelPic(-57,rearY,26,sp);wheelPic(58,frontY,26,sp);
+ // rear swingarm + front fork visibly move with suspension
+ g.strokeStyle='#bbb';g.lineWidth=6;g.beginPath();g.moveTo(-57,rearY);g.lineTo(-8,6);g.stroke();
+ g.strokeStyle='#d8d8d8';g.lineWidth=7;g.beginPath();g.moveTo(28,-25);g.lineTo(58,frontY);g.stroke();
+ g.strokeStyle='#555';g.lineWidth=3;g.beginPath();g.moveTo(24,-22);g.lineTo(54,frontY);g.stroke();
+ // rear shock: spring changes length
+ g.strokeStyle='#f2d64b';g.lineWidth=3;g.beginPath();
+ for(let i=0;i<7;i++){let yy=-13+i*(4+suspR*.05);g.lineTo(-16+(i%2?5:-5),yy)}g.stroke();
+ // frame
+ g.strokeStyle=r.c;g.lineWidth=8;g.beginPath();g.moveTo(-8,6);g.lineTo(-30,-30);g.lineTo(27,-25);g.lineTo(-8,6);g.stroke();
+ // engine
+ g.fillStyle='#4b4b4b';g.roundRect(-21,-7,40,34,5);g.fill();g.fillStyle='#202020';g.fillRect(-13,-1,23,23);
+ for(let i=0;i<6;i++){g.strokeStyle='#999';g.lineWidth=1;g.beginPath();g.moveTo(-14,i*4);g.lineTo(12,i*4);g.stroke()}
+ // exhaust
+ g.strokeStyle='#aaa';g.lineWidth=6;g.beginPath();g.moveTo(15,15);g.quadraticCurveTo(-8,31,-49,0);g.stroke();g.fillStyle='#aaa';g.roundRect(-59,-4,31,9,4);g.fill();
+ // tank, seat, plastics
+ g.fillStyle=r.c;g.beginPath();g.moveTo(-34,-37);g.lineTo(19,-39);g.lineTo(36,-20);g.lineTo(-17,-14);g.closePath();g.fill();
+ g.fillStyle='#111';g.roundRect(-50,-46,69,10,4);g.fill();
+ let bend=Math.max(0,angle-.16)*38;g.fillStyle=r.c;g.beginPath();g.moveTo(-43,-42);g.quadraticCurveTo(-67,-52-bend*.3,-91,-38-bend);g.lineTo(-86,-29-bend*.8);g.quadraticCurveTo(-62,-37,-40,-33);g.fill();
+ g.beginPath();g.moveTo(33,-29);g.quadraticCurveTo(60,-41,83,-22);g.lineTo(76,-14);g.quadraticCurveTo(56,-27,35,-18);g.fill();
+ // bars
+ g.strokeStyle='#333';g.lineWidth=5;g.beginPath();g.moveTo(29,-35);g.lineTo(39,-57);g.lineTo(54,-59);g.stroke();
+ rider();g.restore()
+}
+
+let exhaustPuffs=[];
+function emitExhaust(cx,cy,r){
+ if(!(gas||speed>8))return;
+ let count=gas?2:1;
+ for(let i=0;i<count;i++) exhaustPuffs.push({
+   x:cx-75,y:cy+5+(Math.random()-.5)*4,
+   vx:-1.4-Math.random()*2.2-speed*.012,vy:(Math.random()-.5)*.35,
+   life:1,size:3+Math.random()*4
+ });
+ if(exhaustPuffs.length>90)exhaustPuffs.splice(0,exhaustPuffs.length-90);
+}
+function drawExhaust(){
+ for(let i=exhaustPuffs.length-1;i>=0;i--){
+   let p=exhaustPuffs[i];p.x+=p.vx;p.y+=p.vy;p.life-=.025;p.size+=.10;
+   if(p.life<=0){exhaustPuffs.splice(i,1);continue}
+   g.globalAlpha=Math.max(0,p.life)*.34;
+   g.fillStyle=gas?'#b9bec4':'#d8d8d8';
+   g.beginPath();g.arc(p.x,p.y,p.size,0,Math.PI*2);g.fill();
+ }
+ g.globalAlpha=1;
+}
+function sportBike(cx,cy,r){
+ let sp=scroll*.055, rearY=24+suspR*.55, frontY=24+suspF*.55;
+ g.save();g.translate(cx,cy);g.rotate(-angle+chassisPitch);
+ wheelPic(-60,rearY,28,sp);wheelPic(62,frontY,28,sp);
+ // swingarm and inverted fork
+ g.strokeStyle='#9aa0a6';g.lineWidth=7;g.beginPath();g.moveTo(-60,rearY);g.lineTo(-10,8);g.stroke();
+ g.strokeStyle='#d9b84c';g.lineWidth=7;g.beginPath();g.moveTo(33,-25);g.lineTo(62,frontY);g.stroke();
+ // compact aluminum frame
+ g.strokeStyle='#b7bcc2';g.lineWidth=6;g.beginPath();g.moveTo(-12,8);g.lineTo(-28,-27);g.lineTo(27,-24);g.lineTo(-12,8);g.stroke();
+ // engine
+ g.fillStyle='#25282c';g.roundRect(-25,-8,47,35,7);g.fill();
+ g.fillStyle='#555b61';g.roundRect(-17,-2,29,23,5);g.fill();
+ // exhaust can
+ g.strokeStyle='#888';g.lineWidth=6;g.beginPath();g.moveTo(17,17);g.quadraticCurveTo(-12,29,-48,8);g.stroke();
+ g.fillStyle='#777';g.roundRect(-69,1,31,10,5);g.fill();
+ // aerodynamic lower fairing
+ g.fillStyle=r.c;g.beginPath();g.moveTo(-35,-29);g.lineTo(20,-34);g.lineTo(52,-18);g.lineTo(31,13);g.lineTo(-28,18);g.lineTo(-48,1);g.closePath();g.fill();
+ // dark vent
+ g.fillStyle='#17191d';g.beginPath();g.moveTo(-4,-20);g.lineTo(27,-23);g.lineTo(35,-13);g.lineTo(7,-8);g.closePath();g.fill();
+ // tank and tail
+ g.fillStyle=r.c;g.beginPath();g.moveTo(-31,-34);g.quadraticCurveTo(-12,-54,18,-42);g.lineTo(29,-27);g.lineTo(-29,-25);g.fill();
+ g.beginPath();g.moveTo(-31,-34);g.lineTo(-72,-46);g.lineTo(-78,-37);g.lineTo(-43,-25);g.fill();
+ g.fillStyle='#111';g.roundRect(-52,-46,50,8,4);g.fill();
+ // nose fairing + windscreen
+ g.fillStyle=r.c;g.beginPath();g.moveTo(18,-42);g.quadraticCurveTo(51,-53,76,-29);g.lineTo(67,-14);g.lineTo(34,-22);g.closePath();g.fill();
+ g.fillStyle='#6f8795aa';g.beginPath();g.moveTo(35,-49);g.quadraticCurveTo(51,-64,62,-42);g.lineTo(49,-39);g.closePath();g.fill();
+ // clip-ons
+ g.strokeStyle='#333';g.lineWidth=4;g.beginPath();g.moveTo(34,-43);g.lineTo(49,-48);g.stroke();
+ // tucked rider
+ g.fillStyle='#20242a';g.beginPath();g.arc(-5,-63,12,0,Math.PI*2);g.fill();
+ g.strokeStyle='#20242a';g.lineWidth=12;g.beginPath();g.moveTo(-9,-52);g.lineTo(18,-40);g.lineTo(40,-43);g.stroke();
+ g.lineWidth=10;g.beginPath();g.moveTo(-12,-48);g.lineTo(-37,-30);g.lineTo(-22,-6);g.stroke();
+ g.restore();
+ emitExhaust(cx-8,cy,r);
+}
+function quad(cx,cy,r){let sp=scroll*.045;g.save();g.translate(cx,cy);g.rotate(-angle);wheelPic(-61,22,27,sp);wheelPic(61,22,27,sp);g.fillStyle='#171717';g.fillRect(-70,12,140,8);g.fillStyle=r.c;g.beginPath();g.moveTo(-65,-12);g.lineTo(-40,-29);g.lineTo(30,-29);g.lineTo(66,-10);g.lineTo(54,9);g.lineTo(-58,9);g.closePath();g.fill();g.fillStyle='#292929';g.roundRect(-24,-20,45,30,5);g.fill();g.fillStyle=r.c;g.fillRect(-72,-19,28,8);g.fillRect(43,-19,30,8);g.strokeStyle='#aaa';g.lineWidth=5;g.beginPath();g.moveTo(-61,22);g.lineTo(-28,1);g.moveTo(61,22);g.lineTo(29,1);g.stroke();g.strokeStyle='#333';g.lineWidth=5;g.beginPath();g.moveTo(20,-27);g.lineTo(34,-51);g.lineTo(51,-52);g.stroke();g.fillStyle='#222';g.beginPath();g.arc(2,-70,11,0,7);g.fill();g.strokeStyle='#222';g.lineWidth=9;g.beginPath();g.moveTo(1,-59);g.lineTo(-8,-34);g.moveTo(-2,-54);g.lineTo(30,-45);g.lineTo(45,-51);g.stroke();g.restore()}
+function ebike(cx,cy,r){let sp=scroll*.045;g.save();g.translate(cx,cy);g.rotate(-angle);wheelPic(-52,22,24,sp);wheelPic(52,22,24,sp);g.strokeStyle=r.c;g.lineWidth=7;g.beginPath();g.moveTo(-52,22);g.lineTo(-7,-20);g.lineTo(52,22);g.lineTo(2,22);g.lineTo(-52,22);g.stroke();g.fillStyle='#222';g.roundRect(-14,-17,23,37,4);g.fill();rider();g.restore()}
+function loop(t){let dt=Math.min(.03,(t-last)/1000);last=t,r=R();if((r.t==='DIRT BIKE'||r.t==='SPORT BIKE')&&started)temp=Math.min(110,temp+dt*((choke?8:3)+(gas?3:0)));let can=(r.t!=='DIRT BIKE'&&r.t!=='SPORT BIKE')||started,acc=0;if(can){if((r.t==='DIRT BIKE'||r.t==='SPORT BIKE')){let caps=[0,30,50,72,92,108,r.max];if(gear){let cap=caps[gear];acc=gas*(gear<3?58:gear<5?45:38);if(speed>cap)acc-=45;rpm=Math.min(10000,1200+(speed/cap)*7800+(gas?700:0))}else{rpm=1000+(gas?4200:0)}}else acc=gas?(r.t==='TUNED QUAD'?58:46):0;speed+=(acc-(brake?70:4))*dt;speed=Math.max(0,Math.min(r.max,speed));let target=wheel&&speed>8?Math.min(1.02,.18+speed/130):0;angle+=(target-angle)*4.5*dt;dist+=speed*dt/3.6}else speed=Math.max(0,speed-20*dt);// V13 stable tunable suspension.
+let sn=stiffness/100,dn=damping/100;
+let travel=9-sn*5;
+let targetF=(brake?travel*.9:0)-(gas&&gear?travel*.12:0);
+let targetR=(gas&&gear?travel*.65:0)-(brake?travel*.10:0);
+if(wheel&&speed>8){targetF=-travel*.65;targetR=travel*.75}
+let response=Math.max(1.2,9-sn*3.2-dn*4.4);
+let ease=1-Math.exp(-response*Math.min(dt,.03));
+suspF+=(targetF-suspF)*ease;
+suspR+=(targetR-suspR)*ease;
+suspF=Math.max(-9,Math.min(9,suspF));
+suspR=Math.max(-9,Math.min(9,suspR));
+// Chassis weight transfer: braking pitches nose down; acceleration pitches nose up.
+// Stiffness reduces pitch amount. Damping slows how quickly the chassis settles.
+let pitchTravel=(1-sn*.55);
+let targetPitch=0;
+if(brake&&speed>3) targetPitch=.105*pitchTravel;
+else if(gas&&gear&&speed>1) targetPitch=-.072*pitchTravel;
+if(wheel&&speed>8) targetPitch=0; // wheelie angle already handles intentional lift
+let pitchResponse=Math.max(1.0,7.5-sn*2.0-dn*4.2);
+let pitchEase=1-Math.exp(-pitchResponse*Math.min(dt,.03));
+chassisPitch+=(targetPitch-chassisPitch)*pitchEase;
+chassisPitch=Math.max(-.09,Math.min(.12,chassisPitch));
+
+scroll+=speed*dt*9.5;engine();road();let bx=W*.42,by=H*.58-31;r.t==='DIRT BIKE'?dirt(bx,by,r):r.t==='SPORT BIKE'?sportBike(bx,by,r):r.t==='TUNED QUAD'?quad(bx,by,r):ebike(bx,by,r);document.querySelector('#stats').innerHTML=`${r.n}<br>${speed.toFixed(0)} MPH • ${Math.round(rpm)} RPM`;document.querySelector('#status').textContent=(r.t==='DIRT BIKE'||r.t==='SPORT BIKE')?(started?(gear?`⚙️ GEAR ${gear}`:'🟢 NEUTRAL'):'⚫ ENGINE OFF'):(r.t==='TUNED QUAD'?`💨 BOOST ${Math.round(turbo*100)}%`:'⚡ ELECTRIC');update();drawExhaust();requestAnimationFrame(loop)}requestAnimationFrame(loop);
+
+const susPanel=document.querySelector('#susPanel');
+document.querySelector('#susBtn').onclick=()=>susPanel.style.display=susPanel.style.display==='none'?'block':'none';
+document.querySelector('#stiffness').oninput=e=>{stiffness=+e.target.value;document.querySelector('#stiffVal').textContent=stiffness};
+document.querySelector('#damping').oninput=e=>{damping=+e.target.value;document.querySelector('#dampVal').textContent=damping};
+</script></body></html>
